@@ -154,7 +154,7 @@ class OneDriveAdapter extends OneDriveUtilityAdapter implements FilesystemAdapte
 
     private function getUploadSessionUrl(string $path): string
     {
-        return "/$this->options['directory_type']/$this->drive/items/root:/$path:/createUploadSession";
+        return "/".$this->options['directory_type']."/".$this->drive."/items/root:/".$path.":/createUploadSession";
     }
 
     /**
@@ -198,64 +198,14 @@ class OneDriveAdapter extends OneDriveUtilityAdapter implements FilesystemAdapte
     private function writeChunk(Http $http, string $upload_url, int $file_size, string $chunk, int $first_byte, int $retries = 0): void
     {
         $last_byte_pos = $first_byte + strlen($chunk) - 1;
-        $headers = [
-            'Content-Range' => "bytes $first_byte-$last_byte_pos/$file_size",
-            'Content-Length' => strlen($chunk),
-        ];
-
-        $response = $http->put(
-            $upload_url,
-            [
-                'headers' => $headers,
-                'body' => $chunk,
-                'timeout' => $this->options['request_timeout'],
-            ]
-        );
-
-        if ($response->status() === 404) {
-            throw new Exception('Upload URL has expired, please create new upload session');
-        }
-
-        if ($response->status() === 429) {
-            sleep($response->header('Retry-After')[0] ?? 1);
-            $this->writeChunk($http, $upload_url, $file_size, $chunk, $first_byte, $retries + 1);
-        }
-
-        if ($response->status() >= 500) {
-            if ($retries > 9) {
-                throw new Exception('Upload failed after 10 attempts.');
-            }
-            sleep(pow(2, $retries));
-            $this->writeChunk($http, $upload_url, $file_size, $chunk, $first_byte, $retries + 1);
-        }
-
-        if (($file_size - 1) == $last_byte_pos) {
-            if ($response->status() === 409) {
-                throw new Exception('File name conflict. A file with the same name already exists at target destination.');
-            }
-
-            if (in_array($response->status(), [200, 201])) {
-                $response = new GraphResponse(
-                    $this->graph->createRequest('', ''),
-                    $response->body(),
-                    $response->status(),
-                    $response->headers()
-                );
-
-                $response->getResponseAsObject(DriveItem::class);
-
-                return;
-            }
-
-            throw new Exception(
-                'Unknown error occurred while uploading last part of file. HTTP response code is ' . $response->status()
-            );
-        }
-
-        if ($response->status() !== 202) {
-            throw new Exception('Unknown error occurred while trying to upload file chunk. HTTP status code is ' . $response->status());
-        }
-
+        $response = $this->graph->createRequest('PUT', $upload_url)
+            ->addHeaders(array(
+                'Content-Length' => strlen($chunk),
+                'Content-Range' => "bytes $first_byte-$last_byte_pos/$file_size",
+                'Content-Type' => 'application/octet-stream',
+            ))
+            ->attachBody($chunk)
+            ->execute();
     }
 
     /**
